@@ -277,7 +277,7 @@ class Text2MusicDataset(Dataset):
                 most_common_lang = "en"
 
         if most_common_lang not in SUPPORT_LANGUAGES:
-            raise ValueError(f"Unsupported language: {most_common_lang}")
+            print(f"⚠️ Unsupported language {most_common_lang}, using English"); most_common_lang = "en"
 
         # Process each language segment
         for lang_seg in langs:

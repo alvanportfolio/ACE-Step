@@ -118,7 +118,69 @@ If your VRAM is not sufficient, you can reduce the `r` and `lora_alpha` paramete
 ```
 
 ## 4. Run Training
-Run `python trainer.py` with the following parameter introduction:
+
+We provide two training CLI interfaces:
+
+### Option 1: Basic CLI (Recommended for beginners)
+```bash
+python train_cli.py --dataset_path ./zh_lora_dataset --lora_config_path config/zh_rap_lora_config.json
+```
+
+This provides a clean, simple interface with:
+- Organized help menu with parameter groups
+- Configuration validation
+- Clean progress display
+- Proper error handling
+
+### Option 2: Advanced Dashboard CLI (Recommended for monitoring)
+```bash
+python train_cli_advanced.py --dataset_path ./zh_lora_dataset --lora_config_path config/zh_rap_lora_config.json
+```
+
+This provides a real-time training dashboard with:
+- Live training metrics display
+- Progress visualization
+- ETA calculations
+- Clean, organized layout
+
+### Example Commands
+
+**Basic training:**
+```bash
+python train_cli.py --dataset_path ./zh_lora_dataset --lora_config_path config/zh_rap_lora_config.json
+```
+
+**Custom parameters:**
+```bash
+python train_cli.py --dataset_path ./zh_lora_dataset \
+                    --lora_config_path config/zh_rap_lora_config.json \
+                    --learning_rate 5e-5 \
+                    --batch_size 2 \
+                    --max_steps 100000
+```
+
+**Resume from checkpoint:**
+```bash
+python train_cli.py --dataset_path ./zh_lora_dataset \
+                    --lora_config_path config/zh_rap_lora_config.json \
+                    --ckpt_path ./exps/logs/2024-01-01_12-00-00_chinese_rap_lora/checkpoints/last.ckpt
+```
+
+**Advanced dashboard with auto-confirm:**
+```bash
+python train_cli_advanced.py --dataset_path ./zh_lora_dataset \
+                             --lora_config_path config/zh_rap_lora_config.json \
+                             --yes
+```
+
+### Getting Help
+
+To see all available options:
+```bash
+python train_cli.py --help
+# or
+python train_cli_advanced.py --help
+```
 
 # Trainer Parameter Interpretation
 

@@ -1,8 +1,7 @@
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning import Trainer
-from datetime import datetime
-import argparse
+from pytorch_lightning.callbacks import Callback
 import torch
 import json
 import matplotlib
@@ -26,7 +25,6 @@ from tqdm import tqdm
 import random
 import os
 from acestep.pipeline_ace_step import ACEStepPipeline
-
 
 matplotlib.use("Agg")
 torch.backends.cudnn.benchmark = False
@@ -53,6 +51,7 @@ class Pipeline(LightningModule):
         dataset_path: str = "./data/your_dataset_path",
         lora_config_path: str = None,
         adapter_name: str = "lora_adapter",
+        batch_size: int = 1,
     ):
         super().__init__()
 
@@ -60,14 +59,28 @@ class Pipeline(LightningModule):
         self.is_train = train
         self.T = T
 
+        # VRAM MAX FIX: Get proper device and ensure it's available
+        if torch.cuda.is_available():
+            device = torch.device('cuda')
+            logger.info(f"Using GPU: {torch.cuda.get_device_name()}")
+            logger.info(f"Available VRAM: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f}GB")
+        else:
+            device = torch.device('cpu')
+            logger.warning("CUDA not available, using CPU")
+        
+        self.device_target = device
+
         # Initialize scheduler
         self.scheduler = self.get_scheduler()
 
-        # step 1: load model
+        # Step 1: Load model
+        logger.info("Loading ACEStep pipeline...")
         acestep_pipeline = ACEStepPipeline(checkpoint_dir)
         acestep_pipeline.load_checkpoint(acestep_pipeline.checkpoint_dir)
 
-        transformers = acestep_pipeline.ace_step_transformer.float().cpu()
+        # Load transformer
+        logger.info("Setting up transformer with LoRA...")
+        transformers = acestep_pipeline.ace_step_transformer.float()
         transformers.enable_gradient_checkpointing()
 
         assert lora_config_path is not None, "Please provide a LoRA config path"
@@ -76,30 +89,60 @@ class Pipeline(LightningModule):
                 from peft import LoraConfig
             except ImportError:
                 raise ImportError("Please install peft library to use LoRA training")
+            
             with open(lora_config_path, encoding="utf-8") as f:
                 import json
                 lora_config = json.load(f)
             lora_config = LoraConfig(**lora_config)
             transformers.add_adapter(adapter_config=lora_config, adapter_name=adapter_name)
             self.adapter_name = adapter_name
+            
+            # CRITICAL FIX: Explicitly enable training for LoRA adapter
+            transformers.enable_adapters()
+            transformers.set_adapter(adapter_name)
+            
+            # CRITICAL FIX: Ensure LoRA parameters require gradients
+            lora_param_count = 0
+            for name, param in transformers.named_parameters():
+                if "lora_" in name or adapter_name in name:
+                    param.requires_grad = True
+                    lora_param_count += 1
+            
+            # Summary of trainable parameters
+            trainable_params = sum(p.numel() for p in transformers.parameters() if p.requires_grad)
+            total_params = sum(p.numel() for p in transformers.parameters())
+            logger.info(f"Enabled {lora_param_count} LoRA parameters")
+            logger.info(f"Trainable parameters: {trainable_params:,} / {total_params:,} ({100 * trainable_params / total_params:.2f}%)")
 
-        self.transformers = transformers
+        # VRAM MAX FIX: Move transformer to GPU and ensure it's there
+        logger.info("Moving transformer to GPU...")
+        self.transformers = transformers.to(device)
+        
+        # Verify transformer is on GPU
+        if next(self.transformers.parameters()).device.type != 'cuda':
+            logger.warning("Transformer not on GPU! Forcing move...")
+            self.transformers = self.transformers.cuda()
 
-        self.dcae = acestep_pipeline.music_dcae.float().cpu()
+        # VRAM MAX FIX: Move large models to GPU instead of CPU
+        logger.info("Moving DCAE to GPU...")
+        self.dcae = acestep_pipeline.music_dcae.float().to(device)
         self.dcae.requires_grad_(False)
-
-        self.text_encoder_model = acestep_pipeline.text_encoder_model.float().cpu()
+        
+        logger.info("Moving text encoder to GPU...")
+        self.text_encoder_model = acestep_pipeline.text_encoder_model.float().to(device)
         self.text_encoder_model.requires_grad_(False)
         self.text_tokenizer = acestep_pipeline.text_tokenizer
 
         if self.is_train:
+            # CRITICAL FIX: Set transformer to train mode AFTER LoRA setup
             self.transformers.train()
 
-            # download first
+            # Load MERT model and move to GPU
+            logger.info("Loading and moving MERT model to GPU...")
             try:
                 self.mert_model = AutoModel.from_pretrained(
                     "m-a-p/MERT-v1-330M", trust_remote_code=True, cache_dir=checkpoint_dir
-                ).eval()
+                ).eval().to(device)
             except:
                 import json
                 import os
@@ -121,7 +164,7 @@ class Pipeline(LightningModule):
                     json.dump(mert_config, f)
                 self.mert_model = AutoModel.from_pretrained(
                     "m-a-p/MERT-v1-330M", trust_remote_code=True, cache_dir=checkpoint_dir
-                ).eval()
+                ).eval().to(device)
             self.mert_model.requires_grad_(False)
             self.resampler_mert = torchaudio.transforms.Resample(
                 orig_freq=48000, new_freq=24000
@@ -130,17 +173,33 @@ class Pipeline(LightningModule):
                 "m-a-p/MERT-v1-330M", trust_remote_code=True
             )
 
-            self.hubert_model = AutoModel.from_pretrained("utter-project/mHuBERT-147").eval()
+            # Load HuBERT model and move to GPU
+            logger.info("Loading and moving HuBERT model to GPU...")
+            self.hubert_model = AutoModel.from_pretrained("utter-project/mHuBERT-147").eval().to(device)
             self.hubert_model.requires_grad_(False)
             self.resampler_mhubert = torchaudio.transforms.Resample(
                 orig_freq=48000, new_freq=16000
             )
             self.processor_mhubert = Wav2Vec2FeatureExtractor.from_pretrained(
                 "utter-project/mHuBERT-147",
-                cache_dir=checkpoint_dir,
+                return_attention_mask=False,
             )
 
-            self.ssl_coeff = ssl_coeff
+        else:
+            self.transformers.eval()
+
+        # Log final VRAM usage
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+            memory_allocated = torch.cuda.memory_allocated() / 1e9
+            memory_reserved = torch.cuda.memory_reserved() / 1e9
+            logger.info(f"GPU Memory after model loading: {memory_allocated:.2f}GB allocated, {memory_reserved:.2f}GB reserved")
+
+        self.ssl_coeff = ssl_coeff
+        self.logit_mean = logit_mean
+        self.logit_std = logit_std
+        self.timestep_densities_type = timestep_densities_type
+        self.every_plot_step = every_plot_step
 
     def infer_mert_ssl(self, target_wavs, wav_lengths):
         # Input is N x 2 x T (48kHz), convert to N x T (24kHz), mono
@@ -305,8 +364,7 @@ class Pipeline(LightningModule):
             max_length=text_max_length,
         )
         inputs = {key: value.to(device) for key, value in inputs.items()}
-        if self.text_encoder_model.device != device:
-            self.text_encoder_model.to(device)
+        # Model is already on GPU, no need to move it
         with torch.no_grad():
             outputs = self.text_encoder_model(**inputs)
             last_hidden_states = outputs.last_hidden_state
@@ -411,13 +469,21 @@ class Pipeline(LightningModule):
         )
 
     def configure_optimizers(self):
-        trainable_params = [
-            p for name, p in self.transformers.named_parameters() if p.requires_grad
-        ]
+        # CRITICAL FIX: Only include parameters that actually require gradients
+        trainable_params = []
+        param_count = 0
+        for name, p in self.transformers.named_parameters():
+            if p.requires_grad:
+                trainable_params.append(p)
+                param_count += 1
+        
+        if len(trainable_params) == 0:
+            raise RuntimeError("No trainable parameters found! Check LoRA adapter setup.")
+        
+        logger.info(f"Optimizer will train {param_count} parameter groups")
+        
         optimizer = torch.optim.AdamW(
-            params=[
-                {"params": trainable_params},
-            ],
+            params=trainable_params,
             lr=self.hparams.learning_rate,
             weight_decay=self.hparams.weight_decay,
             betas=(0.8, 0.9),
@@ -443,9 +509,11 @@ class Pipeline(LightningModule):
         return [optimizer], [{"scheduler": lr_scheduler, "interval": "step"}]
 
     def train_dataloader(self):
+        # Pass batch_size to Text2MusicDataset as minibatch_size
         self.train_dataset = Text2MusicDataset(
             train=True,
             train_dataset_path=self.hparams.dataset_path,
+            minibatch_size=self.hparams.batch_size,
         )
         return DataLoader(
             self.train_dataset,
@@ -595,8 +663,16 @@ class Pipeline(LightningModule):
                 on_epoch=False,
                 prog_bar=True,
             )
-        # with torch.autograd.detect_anomaly():
-        #     self.manual_backward(loss)
+        
+        # CRITICAL FIX: Additional gradient checking
+        if torch.isnan(loss) or torch.isinf(loss):
+            logger.error(f"Invalid loss detected: {loss}")
+            # Log current VRAM usage for debugging
+            if torch.cuda.is_available():
+                memory_allocated = torch.cuda.memory_allocated() / 1e9
+                logger.error(f"GPU Memory when NaN occurred: {memory_allocated:.2f}GB")
+            raise RuntimeError("Invalid loss value detected")
+            
         return loss
 
     def training_step(self, batch, batch_idx):
@@ -613,6 +689,7 @@ class Pipeline(LightningModule):
         self.transformers.save_lora_adapter(checkpoint_dir, adapter_name=self.adapter_name)
         return state
 
+    # ... (rest of the methods remain the same: diffusion_process, predict_step, construct_lyrics, plot_step)
     @torch.no_grad()
     def diffusion_process(
         self,
@@ -673,6 +750,9 @@ class Pipeline(LightningModule):
             )
             lyric_mask = torch.cat([lyric_mask, torch.zeros_like(lyric_mask)], 0)
 
+        scheduler.set_timesteps(num_inference_steps, device=device)
+        timesteps = scheduler.timesteps
+
         momentum_buffer = MomentumBuffer()
 
         for i, t in tqdm(enumerate(timesteps), total=num_inference_steps):
@@ -729,6 +809,7 @@ class Pipeline(LightningModule):
         infer_steps = 60
         guidance_scale = 15.0
         omega_scale = 10.0
+
         seed_num = 1234
         random.seed(seed_num)
         bsz = target_latents.shape[0]
@@ -776,12 +857,22 @@ class Pipeline(LightningModule):
 
     def plot_step(self, batch, batch_idx):
         global_step = self.global_step
-        if (
+        
+        # Check if we should skip plotting
+        should_skip = (
             global_step % self.hparams.every_plot_step != 0
             or self.local_rank != 0
-            or torch.distributed.get_rank() != 0
-            or torch.cuda.current_device() != 0
-        ):
+        )
+        
+        # Only check distributed rank if distributed training is initialized
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            should_skip = should_skip or torch.distributed.get_rank() != 0
+        
+        # Only check CUDA device if CUDA is available
+        if torch.cuda.is_available():
+            should_skip = should_skip or torch.cuda.current_device() != 0
+            
+        if should_skip:
             return
         results = self.predict_step(batch)
 
@@ -817,74 +908,5 @@ class Pipeline(LightningModule):
             i += 1
 
 
-def main(args):
-    model = Pipeline(
-        learning_rate=args.learning_rate,
-        num_workers=args.num_workers,
-        shift=args.shift,
-        max_steps=args.max_steps,
-        every_plot_step=args.every_plot_step,
-        dataset_path=args.dataset_path,
-        checkpoint_dir=args.checkpoint_dir,
-        adapter_name=args.exp_name,
-        lora_config_path=args.lora_config_path
-    )
-    checkpoint_callback = ModelCheckpoint(
-        monitor=None,
-        every_n_train_steps=args.every_n_train_steps,
-        save_top_k=-1,
-    )
-    # add datetime str to version
-    logger_callback = TensorBoardLogger(
-        version=datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + args.exp_name,
-        save_dir=args.logger_dir,
-    )
-    trainer = Trainer(
-        accelerator="gpu",
-        devices=args.devices,
-        num_nodes=args.num_nodes,
-        precision=args.precision,
-        accumulate_grad_batches=args.accumulate_grad_batches,
-        strategy="ddp_find_unused_parameters_true",
-        max_epochs=args.epochs,
-        max_steps=args.max_steps,
-        log_every_n_steps=1,
-        logger=logger_callback,
-        callbacks=[checkpoint_callback],
-        gradient_clip_val=args.gradient_clip_val,
-        gradient_clip_algorithm=args.gradient_clip_algorithm,
-        reload_dataloaders_every_n_epochs=args.reload_dataloaders_every_n_epochs,
-        val_check_interval=args.val_check_interval,
-    )
-
-    trainer.fit(
-        model,
-        ckpt_path=args.ckpt_path,
-    )
-
-
-if __name__ == "__main__":
-    args = argparse.ArgumentParser()
-    args.add_argument("--num_nodes", type=int, default=1)
-    args.add_argument("--shift", type=float, default=3.0)
-    args.add_argument("--learning_rate", type=float, default=1e-4)
-    args.add_argument("--num_workers", type=int, default=8)
-    args.add_argument("--epochs", type=int, default=-1)
-    args.add_argument("--max_steps", type=int, default=2000000)
-    args.add_argument("--every_n_train_steps", type=int, default=2000)
-    args.add_argument("--dataset_path", type=str, default="./zh_lora_dataset")
-    args.add_argument("--exp_name", type=str, default="chinese_rap_lora")
-    args.add_argument("--precision", type=str, default="32")
-    args.add_argument("--accumulate_grad_batches", type=int, default=1)
-    args.add_argument("--devices", type=int, default=1)
-    args.add_argument("--logger_dir", type=str, default="./exps/logs/")
-    args.add_argument("--ckpt_path", type=str, default=None)
-    args.add_argument("--checkpoint_dir", type=str, default=None)
-    args.add_argument("--gradient_clip_val", type=float, default=0.5)
-    args.add_argument("--gradient_clip_algorithm", type=str, default="norm")
-    args.add_argument("--reload_dataloaders_every_n_epochs", type=int, default=1)
-    args.add_argument("--every_plot_step", type=int, default=2000)
-    args.add_argument("--val_check_interval", type=int, default=None)
-    args.add_argument("--lora_config_path", type=str, default="config/zh_rap_lora_config.json")
-    args = args.parse_args()
-    main(args)
+# The main function and CLI arguments have been moved to train_cli.py
+# This file now only contains the training logic

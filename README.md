@@ -358,6 +358,8 @@ The `examples/input_params` directory contains sample input parameters that can 
 ## 🔨 Train
 See [TRAIN_INSTRUCTION.md](./TRAIN_INSTRUCTION.md) for detailed training instructions.
 
+For the new CLI training interfaces, see [CLI_GUIDE.md](./CLI_GUIDE.md) for command-line usage and examples.
+
 ## 📜 License & Disclaimer
 
 This project is licensed under [Apache License 2.0](./LICENSE)
