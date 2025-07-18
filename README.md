@@ -13,8 +13,51 @@
     <img src="./assets/orgnization_logos.png" width="100%" alt="StepFun Logo">
 </p>
 
+## ✨ NEW: Training CLI Interface
+
+We've released new clean CLI interfaces for training ACE-Step models with LoRA adapters. These interfaces provide a much better user experience than the old training script.
+
+![Training Overview](assets/training.png)
+
+### 🎯 Two CLI Options:
+
+1. **Basic CLI** (`train_cli.py`) - Simple and clean interface with organized help and progress tracking
+   ```bash
+   python train_cli.py --dataset_path ./your_dataset --lora_config_path config/your_lora_config.json
+   ```
+
+2. **Advanced Dashboard CLI** (`train_cli_advanced.py`) - Real-time training dashboard with live metrics
+   ```bash
+   python train_cli_advanced.py --dataset_path ./your_dataset --lora_config_path config/your_lora_config.json
+   ```
+
+### 📊 Clean, Professional Dashboard Interface:
+
+```
+╔═══════════════════════════════════════════════════════════╗
+║           🎵 ACE-Step Training Dashboard 🎵               ║
+╚═══════════════════════════════════════════════════════════╝
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃         Progress              ┃      Metrics             ┃
+┃ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ┃ ┏━━━━━━━━━━━━┳━━━━━━━━┓ ┃
+┃ Training Progress  45.2%      ┃ ┃ Metric      │ Value  ┃ ┃
+┃                               ┃ ┡━━━━━━━━━━━━━╇━━━━━━━━┩ ┃
+┃ Step:     904,123/2,000,000   ┃ │ Total Loss  │ 0.4532 │ ┃
+┃ Epoch:    12                  ┃ │ Denoising   │ 0.3421 │ ┃
+┃ Speed:    1.45 steps/s        ┃ │ MERT Loss   │ 0.2134 │ ┃
+┃ Elapsed:  6:23:45             ┃ │ Learning Rate│1.00e-04│ ┃
+┃ ETA:      7:36:12             ┃ └─────────────┴────────┘ ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+💡 Tip: Checkpoints are saved every 2000 steps by default
+```
+
+**[For full CLI details and examples, see the CLI Guide](./CLI_GUIDE.md)**
+
 ## Table of Contents
 
+- [✨ NEW: Training CLI Interface](#-new-training-cli-interface)
 - [✨ Features](#-features)
 - [📦 Installation](#-installation)
 - [🚀 Usage](#-usage)
@@ -23,18 +66,18 @@
 
 ## 📝 Abstract
 
-We introduce ACE-Step, a novel open-source foundation model for music generation that overcomes key limitations of existing approaches and achieves state-of-the-art performance through a holistic architectural design. Current methods face inherent trade-offs between generation speed, musical coherence, and controllability. For instance, LLM-based models (e.g., Yue, SongGen) excel at lyric alignment but suffer from slow inference and structural artifacts. Diffusion models (e.g., DiffRhythm), on the other hand, enable faster synthesis but often lack long-range structural coherence.
+We introduce ACE-Step, a novel open-source foundation model for music generation that overcomes key limitations of existing approaches and achieves state-of-the-art performance through a holistic arch[...]
 
-ACE-Step bridges this gap by integrating diffusion-based generation with Sana’s Deep Compression AutoEncoder (DCAE) and a lightweight linear transformer. It further leverages MERT and m-hubert to align semantic representations (REPA) during training, enabling rapid convergence. As a result, our model synthesizes up to 4 minutes of music in just 20 seconds on an A100 GPU—15× faster than LLM-based baselines—while achieving superior musical coherence and lyric alignment across melody, harmony, and rhythm metrics. Moreover, ACE-Step preserves fine-grained acoustic details, enabling advanced control mechanisms such as voice cloning, lyric editing, remixing, and track generation (e.g., lyric2vocal, singing2accompaniment).
+ACE-Step bridges this gap by integrating diffusion-based generation with Sana's Deep Compression AutoEncoder (DCAE) and a lightweight linear transformer. It further leverages MERT and m-hubert to al[...]
 
-Rather than building yet another end-to-end text-to-music pipeline, our vision is to establish a foundation model for music AI: a fast, general-purpose, efficient yet flexible architecture that makes it easy to train sub-tasks on top of it. This paves the way for developing powerful tools that seamlessly integrate into the creative workflows of music artists, producers, and content creators. In short, we aim to build the Stable Diffusion moment for music.
+Rather than building yet another end-to-end text-to-music pipeline, our vision is to establish a foundation model for music AI: a fast, general-purpose, efficient yet flexible architecture that makes [...]
 
 
 ## 📢 News and Updates
 
 - 📃 2025.06.02: Released [ACE-Step Technical Report (PDF)](https://arxiv.org/abs/2506.00045).
 
-- 🎮 2025.05.14: Add `Stable Audio Open Small` sampler `pingpong`. Use SDE to achieve better music consistency and quality, including lyric alignment and style alignment. Use a better method to re-implement `Audio2Audio`
+- 🎮 2025.05.14: Add `Stable Audio Open Small` sampler `pingpong`. Use SDE to achieve better music consistency and quality, including lyric alignment and style alignment. Use a better method to re-i[...]
 
 - 🎤 2025.05.12: Release [RapMachine](https://huggingface.co/ACE-Step/ACE-Step-v1-chinese-rap-LoRA) and fix lora training issues
     - See [ZH_RAP_LORA.md](./ZH_RAP_LORA.md) for details. Audio Examples: https://ace-step.github.io/#RapMachine
@@ -180,7 +223,7 @@ We have evaluated ACE-Step across different hardware setups, yielding the follow
 | MacBook M2 Max  | 2.27 ×         | 26.43 s                               | 1.03 ×         | 58.25 s                               |
 
 
-We use RTF (Real-Time Factor) to measure the performance of ACE-Step. Higher values indicate faster generation speed. 27.27x means to generate 1 minute of music, it takes 2.2 seconds (60/27.27). The performance is measured on a single GPU with batch size 1 and 27 steps.
+We use RTF (Real-Time Factor) to measure the performance of ACE-Step. Higher values indicate faster generation speed. 27.27x means to generate 1 minute of music, it takes 2.2 seconds (60/27.27). The p[...]
 
 
 ## 📦 Installation
@@ -364,7 +407,7 @@ For the new CLI training interfaces, see [CLI_GUIDE.md](./CLI_GUIDE.md) for comm
 
 This project is licensed under [Apache License 2.0](./LICENSE)
 
-ACE-Step enables original music generation across diverse genres, with applications in creative production, education, and entertainment. While designed to support positive and artistic use cases, we acknowledge potential risks such as unintentional copyright infringement due to stylistic similarity, inappropriate blending of cultural elements, and misuse for generating harmful content. To ensure responsible use, we encourage users to verify the originality of generated works, clearly disclose AI involvement, and obtain appropriate permissions when adapting protected styles or materials. By using ACE-Step, you agree to uphold these principles and respect artistic integrity, cultural diversity, and legal compliance. The authors are not responsible for any misuse of the model, including but not limited to copyright violations, cultural insensitivity, or the generation of harmful content.
+ACE-Step enables original music generation across diverse genres, with applications in creative production, education, and entertainment. While designed to support positive and artistic use cases, we [...]
 
 🔔 Important Notice  
 The only official website for the ACE-Step project is our GitHub Pages site.    
